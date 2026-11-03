@@ -1,0 +1,164 @@
+package ru.student.reviewparser.source;
+
+import org.junit.jupiter.api.Test;
+import ru.student.reviewparser.collector.ReviewCollector;
+import ru.student.reviewparser.model.ParsedReview;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class SourceServiceTest {
+
+    private static final String APP_URL =
+            "https://apps.apple.com/ru/app/instagram/id389801252";
+
+    private static final String OTHER_URL =
+            "https://apps.apple.com/ru/app/other/id123456789";
+
+    @Test
+    void registersCollectsAndReturnsReviews() throws Exception {
+        ParsedReview review = review("review-1", APP_URL);
+
+        ReviewCollector collector =
+                (sourceKey, url) -> List.of(review);
+
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                collector
+        );
+
+        SourceRegistry.Source source =
+                service.registerAndCollect(APP_URL);
+
+        assertEquals(1L, source.id());
+        assertEquals(APP_URL, source.url());
+        assertEquals(List.of(source), service.findAllSources());
+        assertEquals(List.of(review), service.findAllReviews());
+        assertEquals(
+                List.of(review),
+                service.findReviewsBySource(source.id())
+        );
+    }
+
+    @Test
+    void separatesReviewsFromDifferentSources() throws Exception {
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                (sourceKey, url) ->
+                        List.of(review(sourceKey, url))
+        );
+
+        SourceRegistry.Source first =
+                service.registerAndCollect(APP_URL);
+
+        SourceRegistry.Source second =
+                service.registerAndCollect(OTHER_URL);
+
+        assertEquals(2, service.findAllSources().size());
+        assertEquals(2, service.findAllReviews().size());
+
+        assertEquals(
+                List.of(review("1", APP_URL)),
+                service.findReviewsBySource(first.id())
+        );
+
+        assertEquals(
+                List.of(review("2", OTHER_URL)),
+                service.findReviewsBySource(second.id())
+        );
+    }
+
+    @Test
+    void repeatedRegistrationRefreshesReviews() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                (sourceKey, url) ->
+                        List.of(review(
+                                "review-" + calls.incrementAndGet(),
+                                url
+                        ))
+        );
+
+        SourceRegistry.Source first =
+                service.registerAndCollect(APP_URL);
+
+        SourceRegistry.Source second =
+                service.registerAndCollect(APP_URL);
+
+        assertEquals(first, second);
+        assertEquals(1, service.findAllSources().size());
+        assertEquals(2, calls.get());
+
+        assertEquals(
+                List.of(review("review-2", APP_URL)),
+                service.findReviewsBySource(first.id())
+        );
+    }
+
+    @Test
+    void keepsPreviousReviewsWhenRefreshFails() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                (sourceKey, url) -> {
+                    if (calls.incrementAndGet() == 1) {
+                        return List.of(review("original", url));
+                    }
+
+                    throw new IOException("Simulated loading failure");
+                }
+        );
+
+        service.registerAndCollect(APP_URL);
+
+        assertThrows(
+                IOException.class,
+                () -> service.registerAndCollect(APP_URL)
+        );
+
+        assertEquals(
+                List.of(review("original", APP_URL)),
+                service.findAllReviews()
+        );
+    }
+
+    @Test
+    void rejectsUnknownSourceId() {
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                (sourceKey, url) -> List.of()
+        );
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.findReviewsBySource(999)
+        );
+
+        assertTrue(service.findAllReviews().isEmpty());
+    }
+
+    private static ParsedReview review(
+            String id,
+            String url
+    ) {
+        return new ParsedReview(
+                id,
+                url,
+                "Test author",
+                "Test title",
+                "Test content",
+                new BigDecimal("5"),
+                LocalDate.of(2026, 11, 3)
+        );
+    }
+}
