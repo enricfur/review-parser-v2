@@ -8,6 +8,8 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -145,6 +147,75 @@ class SourceServiceTest {
         );
 
         assertTrue(service.findAllReviews().isEmpty());
+    }
+
+    @Test
+    void collectsTwoSourcesInParallel() throws Exception {
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        CountDownLatch allowCompletion = new CountDownLatch(1);
+
+        ReviewCollector collector = (sourceKey, url) -> {
+            bothStarted.countDown();
+
+            if (!allowCompletion.await(5, TimeUnit.SECONDS)) {
+                throw new IOException("Collection timed out");
+            }
+
+            return List.of(review(sourceKey, url));
+        };
+
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                collector
+        );
+
+        SourceRegistry.Source first =
+                service.registerAndCollectAsync(APP_URL);
+
+        SourceRegistry.Source second =
+                service.registerAndCollectAsync(OTHER_URL);
+
+        try {
+            assertTrue(
+                    bothStarted.await(5, TimeUnit.SECONDS),
+                    "Both collection threads must start in parallel"
+            );
+
+            assertEquals(
+                    "RUNNING",
+                    service.findCollectionStatus(first.id())
+            );
+
+            assertEquals(
+                    "RUNNING",
+                    service.findCollectionStatus(second.id())
+            );
+        } finally {
+            allowCompletion.countDown();
+        }
+
+        for (int attempt = 0; attempt < 250; attempt++) {
+            if ("COMPLETED".equals(
+                    service.findCollectionStatus(first.id()))
+                    && "COMPLETED".equals(
+                    service.findCollectionStatus(second.id()))) {
+                break;
+            }
+
+            Thread.sleep(20);
+        }
+
+        assertEquals(
+                "COMPLETED",
+                service.findCollectionStatus(first.id())
+        );
+
+        assertEquals(
+                "COMPLETED",
+                service.findCollectionStatus(second.id())
+        );
+
+        assertEquals(2, service.findAllReviews().size());
     }
 
     private static ParsedReview review(

@@ -18,6 +18,9 @@ public class SourceService {
     private final Map<Long, List<ParsedReview>> reviewsBySource =
             new LinkedHashMap<>();
 
+    private final Map<Long, String> collectionStatuses =
+            new LinkedHashMap<>();
+
     public SourceService(
             SourceRegistry registry,
             ReviewCollector collector
@@ -26,11 +29,63 @@ public class SourceService {
         this.collector = Objects.requireNonNull(collector);
     }
 
-    public synchronized SourceRegistry.Source registerAndCollect(
+    public SourceRegistry.Source registerAndCollect(
             String url
     ) throws IOException, InterruptedException {
 
         SourceRegistry.Source source = registry.register(url);
+        collectAndStore(source);
+
+        synchronized (this) {
+            collectionStatuses.put(source.id(), "COMPLETED");
+        }
+
+        return source;
+    }
+
+    public SourceRegistry.Source registerAndCollectAsync(
+            String url
+    ) {
+        SourceRegistry.Source source = registry.register(url);
+
+        synchronized (this) {
+            if ("RUNNING".equals(collectionStatuses.get(source.id()))) {
+                return source;
+            }
+
+            collectionStatuses.put(source.id(), "RUNNING");
+        }
+
+        Runnable task = () -> {
+            try {
+                collectAndStore(source);
+
+                synchronized (this) {
+                    collectionStatuses.put(source.id(), "COMPLETED");
+                }
+            } catch (IOException exception) {
+                markFailed(source.id());
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                markFailed(source.id());
+            } catch (RuntimeException exception) {
+                markFailed(source.id());
+            }
+        };
+
+        Thread thread = new Thread(
+                task,
+                "review-collector-" + source.id()
+        );
+
+        thread.start();
+
+        return source;
+    }
+
+    private void collectAndStore(
+            SourceRegistry.Source source
+    ) throws IOException, InterruptedException {
 
         List<ParsedReview> reviews =
                 collector.collectFromObject(
@@ -38,12 +93,26 @@ public class SourceService {
                         source.url()
                 );
 
-        reviewsBySource.put(
-                source.id(),
-                List.copyOf(reviews)
-        );
+        synchronized (this) {
+            reviewsBySource.put(
+                    source.id(),
+                    List.copyOf(reviews)
+            );
+        }
+    }
 
-        return source;
+    private synchronized void markFailed(long sourceId) {
+        collectionStatuses.put(sourceId, "FAILED");
+    }
+
+    public synchronized String findCollectionStatus(long sourceId) {
+        if (registry.findById(sourceId) == null) {
+            throw new IllegalArgumentException(
+                    "Unknown source ID: " + sourceId
+            );
+        }
+
+        return collectionStatuses.get(sourceId);
     }
 
     public List<SourceRegistry.Source> findAllSources() {

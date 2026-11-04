@@ -32,6 +32,9 @@ class SourceControllerIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private SourceService sourceService;
+
     @TestBean(
             name = "reviewCollector",
             methodName = "offlineReviewCollector"
@@ -47,20 +50,22 @@ class SourceControllerIntegrationTest {
                         .content("""
                                 {"url":"https://apps.apple.com/ru/app/integration-test/id123456789"}
                                 """))
-                .andExpect(status().isCreated())
+                .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.id").isNumber())
                 .andExpect(jsonPath("$.url").value(APP_URL))
-                .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
 
         long sourceId = extractSourceId(response);
 
+        waitForStatus(sourceId, "COMPLETED");
+
         mockMvc.perform(get("/sources"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath(
-                        "$[?(@.url == '" + APP_URL + "')]"
+                        "$[?(@.url == '" + APP_URL
+                                + "' && @.status == 'COMPLETED')]"
                 ).isNotEmpty());
 
         mockMvc.perform(get("/answer"))
@@ -81,15 +86,54 @@ class SourceControllerIntegrationTest {
     }
 
     @Test
-    void collectionFailureReturnsBadGateway() throws Exception {
-        mockMvc.perform(post("/sources")
+    void collectionFailureSetsFailedStatus() throws Exception {
+
+        String response = mockMvc.perform(post("/sources")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"url":"https://apps.apple.com/ru/app/failing-test/id987654321"}
                                 """))
-                .andExpect(status().isBadGateway())
-                .andExpect(jsonPath("$.error")
-                        .value("SOURCE_LOADING_FAILED"));
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.url").value(FAILED_URL))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        long sourceId = extractSourceId(response);
+
+        waitForStatus(sourceId, "FAILED");
+
+        mockMvc.perform(get("/sources"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath(
+                        "$[?(@.url == '" + FAILED_URL
+                                + "' && @.status == 'FAILED')]"
+                ).isNotEmpty());
+
+        mockMvc.perform(get("/answer")
+                        .param("sourceId", Long.toString(sourceId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+    }
+
+    private void waitForStatus(
+            long sourceId,
+            String expectedStatus
+    ) throws InterruptedException {
+
+        for (int attempt = 0; attempt < 100; attempt++) {
+            if (expectedStatus.equals(
+                    sourceService.findCollectionStatus(sourceId))) {
+                return;
+            }
+
+            Thread.sleep(20);
+        }
+
+        throw new AssertionError(
+                "Source " + sourceId
+                        + " did not reach status " + expectedStatus
+        );
     }
 
     private static long extractSourceId(String response) {
