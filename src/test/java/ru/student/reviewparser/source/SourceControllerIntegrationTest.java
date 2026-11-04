@@ -3,11 +3,9 @@ package ru.student.reviewparser.source;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.test.web.servlet.MockMvc;
 import ru.student.reviewparser.collector.ReviewCollector;
 import ru.student.reviewparser.model.ParsedReview;
@@ -33,6 +31,12 @@ class SourceControllerIntegrationTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @TestBean(
+            name = "reviewCollector",
+            methodName = "offlineReviewCollector"
+    )
+    private ReviewCollector collector;
 
     @Test
     void postSourceCollectsReviewsAndExposesThemThroughAnswer()
@@ -111,37 +115,31 @@ class SourceControllerIntegrationTest {
         );
     }
 
-    @TestConfiguration(proxyBeanMethods = false)
-    static class OfflineCollectorConfiguration {
-
-        @Bean
-        @Primary
-        ReviewCollector offlineReviewCollector() {
-            return (sourceKey, url) -> {
-                if (FAILED_URL.equals(url)) {
-                    throw new IOException(
-                            "Simulated Apple loading failure"
-                    );
-                }
-
-                if (!APP_URL.equals(url)) {
-                    throw new IOException(
-                            "Unexpected test URL: " + url
-                    );
-                }
-
-                return List.of(
-                        new ParsedReview(
-                                "integration-review-1",
-                                url,
-                                "Integration Author",
-                                "Integration Title",
-                                "Integration review content",
-                                new BigDecimal("5"),
-                                LocalDate.of(2026, 11, 3)
-                        )
+    private static ReviewCollector offlineReviewCollector() {
+        return (sourceKey, url) -> {
+            if (FAILED_URL.equals(url)) {
+                throw new IOException(
+                        "Simulated Apple loading failure"
                 );
-            };
-        }
+            }
+
+            if (!APP_URL.equals(url)) {
+                throw new IOException(
+                        "Unexpected test URL: " + url
+                );
+            }
+
+            return List.of(
+                    new ParsedReview(
+                            "integration-review-1",
+                            url,
+                            "Integration Author",
+                            "Integration Title",
+                            "Integration review content",
+                            new BigDecimal("5"),
+                            LocalDate.of(2026, 11, 3)
+                    )
+            );
+        };
     }
 }

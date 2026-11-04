@@ -7,10 +7,14 @@ import java.util.Set;
 
 public final class SourceUrlPolicy {
 
+    private static final String DOSTUPNOE_PRAVO_HOST =
+            "dostupnoepravo.ru";
+
     private static final Set<String> ALLOWED_HOSTS =
             Set.of(
                     "apps.apple.com",
-                    "itunes.apple.com"
+                    "itunes.apple.com",
+                    DOSTUPNOE_PRAVO_HOST
             );
 
     private SourceUrlPolicy() {
@@ -56,6 +60,16 @@ public final class SourceUrlPolicy {
                     ? ""
                     : "?" + uri.getRawQuery();
 
+            if (DOSTUPNOE_PRAVO_HOST.equals(normalizedHost)
+                    && !isSupportedDostupnoePravoPath(
+                    path,
+                    uri.getRawQuery())) {
+
+                throw new IllegalArgumentException(
+                        "Unsupported Dostupnoe Pravo URL"
+                );
+            }
+
             return new URI(
                     "https://" + normalizedHost + path + query
             ).normalize();
@@ -66,5 +80,30 @@ public final class SourceUrlPolicy {
                     exception
             );
         }
+    }
+
+    private static boolean isSupportedDostupnoePravoPath(
+            String path,
+            String query
+    ) {
+        boolean objectPage = path.matches(
+                "/review/(?:companies|lawyers)/"
+                        + "[0-9]+-[a-zA-Z0-9-]+/?"
+        );
+
+        boolean reviewPage = path.matches(
+                "/survey/[0-9]+-[a-zA-Z0-9-]+/?"
+        );
+
+        if (reviewPage) {
+            return query == null;
+        }
+
+        if (objectPage) {
+            return query == null
+                    || query.matches("page=[1-9][0-9]*");
+        }
+
+        return false;
     }
 }
