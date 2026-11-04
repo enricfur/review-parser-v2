@@ -218,6 +218,117 @@ class SourceServiceTest {
         assertEquals(2, service.findAllReviews().size());
     }
 
+    @Test
+    void doesNotStartDuplicateCollectionWhileRunning()
+            throws Exception {
+
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch allowCompletion = new CountDownLatch(1);
+        AtomicInteger calls = new AtomicInteger();
+
+        ReviewCollector collector = (sourceKey, url) -> {
+            calls.incrementAndGet();
+            started.countDown();
+
+            if (!allowCompletion.await(5, TimeUnit.SECONDS)) {
+                throw new IOException("Collection timed out");
+            }
+
+            return List.of(review(sourceKey, url));
+        };
+
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                collector
+        );
+
+        SourceRegistry.Source first =
+                service.registerAndCollectAsync(APP_URL);
+
+        try {
+            assertTrue(
+                    started.await(5, TimeUnit.SECONDS),
+                    "First collection must start"
+            );
+
+            SourceRegistry.Source second =
+                    service.registerAndCollectAsync(APP_URL);
+
+            assertEquals(first, second);
+            assertEquals(1, service.findAllSources().size());
+            assertEquals(1, calls.get());
+
+            assertEquals(
+                    "RUNNING",
+                    service.findCollectionStatus(first.id())
+            );
+        } finally {
+            allowCompletion.countDown();
+        }
+
+        for (int attempt = 0; attempt < 250; attempt++) {
+            if ("COMPLETED".equals(
+                    service.findCollectionStatus(first.id()))) {
+                break;
+            }
+
+            Thread.sleep(20);
+        }
+
+        assertEquals(
+                "COMPLETED",
+                service.findCollectionStatus(first.id())
+        );
+
+        assertEquals(1, calls.get());
+        assertEquals(1, service.findAllReviews().size());
+    }
+
+    @Test
+    void keepsPreviousReviewsWhenAsyncRefreshFails() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+
+        SourceService service = new SourceService(
+                new SourceRegistry(),
+                (sourceKey, url) -> {
+                    if (calls.incrementAndGet() == 1) {
+                        return List.of(review("original", url));
+                    }
+
+                    throw new IOException("Simulated refresh failure");
+                }
+        );
+
+        SourceRegistry.Source first =
+                service.registerAndCollect(APP_URL);
+
+        SourceRegistry.Source second =
+                service.registerAndCollectAsync(APP_URL);
+
+        assertEquals(first, second);
+
+        for (int attempt = 0; attempt < 250; attempt++) {
+            if ("FAILED".equals(
+                    service.findCollectionStatus(first.id()))) {
+                break;
+            }
+
+            Thread.sleep(20);
+        }
+
+        assertEquals(
+                "FAILED",
+                service.findCollectionStatus(first.id())
+        );
+
+        assertEquals(2, calls.get());
+
+        assertEquals(
+                List.of(review("original", APP_URL)),
+                service.findReviewsBySource(first.id())
+        );
+    }
+
     private static ParsedReview review(
             String id,
             String url
