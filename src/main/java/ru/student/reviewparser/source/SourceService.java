@@ -11,7 +11,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +28,7 @@ public class SourceService {
     private final SourceRegistry registry;
     private final ReviewCollector collector;
     private final ThreadPoolExecutor executor;
+    private final ScheduledExecutorService scheduler;
 
     private final Map<Long, List<ParsedReview>> reviewsBySource =
             new LinkedHashMap<>();
@@ -39,8 +42,22 @@ public class SourceService {
             SourceRegistry registry,
             ReviewCollector collector
     ) {
+        this(registry, collector, 0);
+    }
+
+    public SourceService(
+            SourceRegistry registry,
+            ReviewCollector collector,
+            long scheduleIntervalSeconds
+    ) {
         this.registry = Objects.requireNonNull(registry);
         this.collector = Objects.requireNonNull(collector);
+
+        if (scheduleIntervalSeconds < 0) {
+            throw new IllegalArgumentException(
+                    "Schedule interval cannot be negative"
+            );
+        }
 
         AtomicInteger threadNumber = new AtomicInteger();
 
@@ -58,6 +75,68 @@ public class SourceService {
         );
 
         this.executor.allowCoreThreadTimeOut(true);
+
+        if (scheduleIntervalSeconds > 0) {
+            this.scheduler =
+                    Executors.newSingleThreadScheduledExecutor(
+                            task -> new Thread(
+                                    task,
+                                    "review-scheduler"
+                            )
+                    );
+
+            scheduler.scheduleWithFixedDelay(
+                    this::runScheduledCollections,
+                    scheduleIntervalSeconds,
+                    scheduleIntervalSeconds,
+                    TimeUnit.SECONDS
+            );
+        } else {
+            this.scheduler = null;
+        }
+    }
+
+    private void runScheduledCollections() {
+        try {
+            for (SourceRegistry.Source source : registry.findAll()) {
+                synchronized (this) {
+                    if (closed) {
+                        return;
+                    }
+
+                    if (isCollectionActive(source.id())) {
+                        continue;
+                    }
+                }
+
+                try {
+                    registerAndCollectAsync(source.url());
+
+                } catch (RejectedExecutionException exception) {
+                    LOGGER.log(
+                            Level.WARNING,
+                            "Scheduled collection rejected for source "
+                                    + source.id(),
+                            exception
+                    );
+
+                } catch (RuntimeException exception) {
+                    LOGGER.log(
+                            Level.WARNING,
+                            "Could not schedule source "
+                                    + source.id(),
+                            exception
+                    );
+                }
+            }
+
+        } catch (RuntimeException exception) {
+            LOGGER.log(
+                    Level.SEVERE,
+                    "Scheduled collection cycle failed",
+                    exception
+            );
+        }
     }
 
     public SourceRegistry.Source registerAndCollect(
@@ -253,6 +332,11 @@ public class SourceService {
         }
 
         closed = true;
+
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
+
         executor.shutdownNow();
 
         collectionStatuses.replaceAll((id, status) ->

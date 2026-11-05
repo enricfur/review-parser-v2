@@ -1,5 +1,6 @@
 package ru.student.reviewparser.collector;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -44,10 +45,7 @@ public class CollectorConfiguration {
             HtmlLoader loader,
             DostupnoePravoReviewParser parser
     ) {
-        return new DostupnoePravoReviewCollector(
-                loader,
-                parser
-        );
+        return new DostupnoePravoReviewCollector(loader, parser);
     }
 
     @Bean
@@ -70,8 +68,14 @@ public class CollectorConfiguration {
     @Bean
     public SourceService sourceService(
             SourceRegistry registry,
-            ReviewCollector collector
+            ReviewCollector collector,
+            @Value("${review.collection.schedule-interval-seconds:60}")
+            long scheduleIntervalSeconds
     ) {
-        return new SourceService(registry, collector);
+        return new SourceService(
+                registry,
+                collector,
+                scheduleIntervalSeconds
+        );
     }
 }
