@@ -326,23 +326,53 @@ public class SourceService {
     }
 
     @PreDestroy
-    public synchronized void close() {
-        if (closed) {
-            return;
+    public void close() {
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+
+            closed = true;
+
+            if (scheduler != null) {
+                scheduler.shutdownNow();
+            }
+
+            executor.shutdownNow();
+
+            collectionStatuses.replaceAll((id, status) ->
+                    "QUEUED".equals(status) || "RUNNING".equals(status)
+                            ? "FAILED"
+                            : status
+            );
         }
 
-        closed = true;
+        // Wait outside the synchronized block so workers
+        // can acquire the service lock while finishing.
+        try {
+            if (scheduler != null
+                    && !scheduler.awaitTermination(
+                    2, TimeUnit.SECONDS
+            )) {
+                LOGGER.warning(
+                        "Collection scheduler did not stop within 2 seconds"
+                );
+            }
 
-        if (scheduler != null) {
-            scheduler.shutdownNow();
+            if (!executor.awaitTermination(
+                    2, TimeUnit.SECONDS
+            )) {
+                LOGGER.warning(
+                        "Collection executor did not stop within 2 seconds"
+                );
+            }
+
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+
+            LOGGER.warning(
+                    "Interrupted while stopping collection service"
+            );
         }
-
-        executor.shutdownNow();
-
-        collectionStatuses.replaceAll((id, status) ->
-                "QUEUED".equals(status) || "RUNNING".equals(status)
-                        ? "FAILED"
-                        : status
-        );
     }
 }
