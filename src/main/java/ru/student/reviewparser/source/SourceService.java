@@ -2,9 +2,11 @@ package ru.student.reviewparser.source;
 
 import jakarta.annotation.PreDestroy;
 import ru.student.reviewparser.collector.ReviewCollector;
+import ru.student.reviewparser.collector.ReviewStorage;
 import ru.student.reviewparser.model.ParsedReview;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,8 +29,10 @@ public class SourceService {
 
     private final SourceRegistry registry;
     private final ReviewCollector collector;
+    private final ReviewStorage reviewStorage;
     private final ThreadPoolExecutor executor;
     private final ScheduledExecutorService scheduler;
+    private final ExecutorStatusLogger statusLogger;
 
     private final Map<Long, List<ParsedReview>> reviewsBySource =
             new LinkedHashMap<>();
@@ -42,7 +46,7 @@ public class SourceService {
             SourceRegistry registry,
             ReviewCollector collector
     ) {
-        this(registry, collector, 0);
+        this(registry, collector, 0, null);
     }
 
     public SourceService(
@@ -50,13 +54,44 @@ public class SourceService {
             ReviewCollector collector,
             long scheduleIntervalSeconds
     ) {
+        this(registry, collector, scheduleIntervalSeconds, null);
+    }
+
+    public SourceService(
+            SourceRegistry registry,
+            ReviewCollector collector,
+            long scheduleIntervalSeconds,
+            ReviewStorage reviewStorage
+    ) {
         this.registry = Objects.requireNonNull(registry);
         this.collector = Objects.requireNonNull(collector);
+        this.reviewStorage = reviewStorage;
 
         if (scheduleIntervalSeconds < 0) {
             throw new IllegalArgumentException(
                     "Schedule interval cannot be negative"
             );
+        }
+
+        if (reviewStorage != null) {
+            try {
+                Map<Long, List<ParsedReview>> restored =
+                        reviewStorage.load();
+
+                for (Map.Entry<Long, List<ParsedReview>> entry
+                        : restored.entrySet()) {
+                    reviewsBySource.put(
+                            entry.getKey(),
+                            List.copyOf(entry.getValue())
+                    );
+                }
+
+            } catch (IOException exception) {
+                throw new UncheckedIOException(
+                        "Could not load saved reviews",
+                        exception
+                );
+            }
         }
 
         AtomicInteger threadNumber = new AtomicInteger();
@@ -94,6 +129,9 @@ public class SourceService {
         } else {
             this.scheduler = null;
         }
+
+        this.statusLogger = new ExecutorStatusLogger(executor);
+        this.statusLogger.start();
     }
 
     private void runScheduledCollections() {
@@ -272,13 +310,23 @@ public class SourceService {
                         source.url()
                 );
 
+        List<ParsedReview> snapshot = List.copyOf(reviews);
+
         synchronized (this) {
-            if (!closed) {
-                reviewsBySource.put(
-                        source.id(),
-                        List.copyOf(reviews)
-                );
+            if (closed) {
+                return;
             }
+
+            if (reviewStorage != null) {
+                Map<Long, List<ParsedReview>> updated =
+                        new LinkedHashMap<>(reviewsBySource);
+
+                updated.put(source.id(), snapshot);
+
+                reviewStorage.save(updated);
+            }
+
+            reviewsBySource.put(source.id(), snapshot);
         }
     }
 
@@ -333,6 +381,8 @@ public class SourceService {
             }
 
             closed = true;
+
+            statusLogger.close();
 
             if (scheduler != null) {
                 scheduler.shutdownNow();
