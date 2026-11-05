@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.RejectedExecutionException;
 
 @RestControllerAdvice
 public class SourceExceptionHandler {
@@ -59,6 +60,18 @@ public class SourceExceptionHandler {
                 .body(Map.of(
                         "error", "COLLECTION_INTERRUPTED",
                         "message", "Source collection was interrupted"
+                ));
+    }
+
+    @ExceptionHandler(RejectedExecutionException.class)
+    public ResponseEntity<Map<String, String>> handleCollectionRejected(
+            RejectedExecutionException exception
+    ) {
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of(
+                        "error", "COLLECTION_UNAVAILABLE",
+                        "message", "Collection service is busy or unavailable"
                 ));
     }
 
