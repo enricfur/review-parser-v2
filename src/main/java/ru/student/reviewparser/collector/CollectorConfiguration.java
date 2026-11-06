@@ -1,12 +1,16 @@
 package ru.student.reviewparser.collector;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import ru.student.reviewparser.parser.AppleFeedParser;
 import ru.student.reviewparser.parser.DostupnoePravoReviewParser;
 import ru.student.reviewparser.source.SourceFileStorage;
+import ru.student.reviewparser.source.SourceH2Storage;
 import ru.student.reviewparser.source.SourceRegistry;
 import ru.student.reviewparser.source.SourceService;
 import ru.student.reviewparser.source.SourceStorage;
@@ -66,7 +70,12 @@ public class CollectorConfiguration {
     }
 
     @Bean
-    public SourceStorage sourceStorage(
+    @ConditionalOnProperty(
+            name = "review.storage.mode",
+            havingValue = "json",
+            matchIfMissing = true
+    )
+    public SourceStorage sourceFileStorage(
             @Value("${review.storage.sources-file}")
             String filePath
     ) {
@@ -74,11 +83,46 @@ public class CollectorConfiguration {
     }
 
     @Bean
-    public ReviewStorage reviewStorage(
+    @ConditionalOnProperty(
+            name = "review.storage.mode",
+            havingValue = "json",
+            matchIfMissing = true
+    )
+    public ReviewStorage reviewFileStorage(
             @Value("${review.storage.reviews-file}")
             String filePath
     ) {
         return new ReviewFileStorage(Path.of(filePath));
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            name = "review.storage.mode",
+            havingValue = "h2"
+    )
+    public SourceStorage sourceH2Storage(
+            JdbcTemplate jdbcTemplate,
+            TransactionTemplate transactionTemplate
+    ) {
+        return new SourceH2Storage(
+                jdbcTemplate,
+                transactionTemplate
+        );
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            name = "review.storage.mode",
+            havingValue = "h2"
+    )
+    public ReviewStorage reviewH2Storage(
+            JdbcTemplate jdbcTemplate,
+            TransactionTemplate transactionTemplate
+    ) {
+        return new ReviewH2Storage(
+                jdbcTemplate,
+                transactionTemplate
+        );
     }
 
     @Bean
