@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import ru.student.reviewparser.model.ParsedReview;
 
+import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.List;
 
 @RestController
@@ -56,13 +58,53 @@ public class SourceController {
             produces = "application/json;charset=UTF-8"
     )
     public List<ParsedReview> getAnswer(
-            @RequestParam(required = false) Long sourceId
+            @RequestParam(required = false) Long sourceId,
+            @RequestParam(required = false) BigDecimal minRating,
+            @RequestParam(required = false) String sortBy,
+            @RequestParam(defaultValue = "asc") String direction
     ) {
+        List<ParsedReview> reviews;
+
         if (sourceId != null) {
-            return sourceService.findReviewsBySource(sourceId);
+            reviews = sourceService.findReviewsBySource(sourceId);
+        } else {
+            reviews = sourceService.findAllReviews();
         }
 
-        return sourceService.findAllReviews();
+        if (minRating != null) {
+            reviews = reviews.parallelStream()
+                    .filter(review ->
+                            review.rating().compareTo(minRating) >= 0
+                    )
+                    .toList();
+        }
+
+        if (sortBy == null) {
+            return reviews;
+        }
+
+        Comparator<ParsedReview> comparator = switch (sortBy) {
+            case "publishedAt" ->
+                    Comparator.comparing(ParsedReview::publishedAt);
+            case "rating" ->
+                    Comparator.comparing(ParsedReview::rating);
+            default ->
+                    throw new IllegalArgumentException(
+                            "Unsupported sortBy: " + sortBy
+                    );
+        };
+
+        if ("desc".equalsIgnoreCase(direction)) {
+            comparator = comparator.reversed();
+        } else if (!"asc".equalsIgnoreCase(direction)) {
+            throw new IllegalArgumentException(
+                    "Unsupported direction: " + direction
+            );
+        }
+
+        return reviews.parallelStream()
+                .sorted(comparator)
+                .toList();
     }
 
     public record RegisterSourceRequest(String url) {
